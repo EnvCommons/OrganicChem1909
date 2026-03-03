@@ -190,11 +190,6 @@ class OrganicChem1909(Environment):
         """Return the question prompt with metadata."""
         prompt_text = f"""{self.question}
 
----
-**Context:** From Chapter "{self.chapter}" (Page {self.page_reference})
-**Category:** {self.category.title()}
-**Difficulty:** {self.difficulty.title()}
-
 Please provide a detailed answer with reasoning. Consider the historical context (1909 chemistry practices) where relevant."""
 
         return [TextBlock(text=prompt_text)]
