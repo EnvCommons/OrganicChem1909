@@ -27,7 +27,7 @@ There are three splits: train, validation, and test. Questions are loaded from a
 
 ## Reward Structure
 
-This is a sparse reward environment with continuous scoring. The agent calls the `answer` tool once with its response, and the environment grades it using an LLM grader (gpt-5-mini). The grader assigns a score from 0.0 to 1.0 and a grade:
+This is a sparse reward environment with continuous scoring. The agent replies with its response as an ordinary message (no tool call), which ends the rollout, and the environment grades that message text using an LLM grader (gpt-5-mini). The grader assigns a score from 0.0 to 1.0 and a grade:
 
 - **CORRECT** (score 0.85+): The answer demonstrates full conceptual understanding. Reward: the grader's score (0.85-1.0).
 - **PARTIALLY_CORRECT** (score 0.7+): The answer shows partial but conceptually sound reasoning. Reward: the grader's score (0.7-0.85).
@@ -45,9 +45,12 @@ Questions are sourced from "Practical Methods of Organic Chemistry" (1909), a pu
 
 ## Tools
 
-Agents are given a single tool:
+None. The model is given no tools: it answers the chemistry question as an
+ordinary message, and that message ends the rollout.
 
-- `answer`: Submit an answer to the chemistry question. The answer is graded by the LLM grader against the reference answer. Returns the grade, score, and feedback. This tool can only be called once per task.
+Grading runs through a hidden `@terminal` tool, which sends the message text to
+the LLM grader alongside the reference answer and returns the grade, score, and
+feedback.
 
 ## Time Horizon
 

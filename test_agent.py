@@ -1,112 +1,177 @@
-"""
-test_agent.py - Local Testing for OrganicChem1909
+"""Agent loop for OrganicChem1909.
 
-Tests the environment with OpenAI's GPT-5.2 model using the Responses API.
+OrganicChem1909 uses a one-argument @terminal tool, and it is the environment's
+only tool — so the model is given NO tools at all. It reads the chemistry
+question and replies with its answer as an ordinary message; the harness routes
+that message text to session.call_terminal_tool(), which grades it with an LLM
+judge for conceptual understanding. Rewards are continuous (0.0-1.0).
 
-Usage:
-    export OPENAI_API_KEY="your-key-here"
-    python server.py  # In one terminal
-    python test_agent.py  # In another terminal
+Because list_tools() is empty, the `tools` argument is omitted entirely rather
+than passed as [] (an empty tools array is rejected by some providers).
+
+Runs against the deployed environment by default; set LOCAL=1 to point at a
+local `python server.py` on port 8080.
+
+Writes a trajectory to organicchem1909_trajectory.jsonl.
 """
 
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 
 from openai import AsyncOpenAI
 from openreward import AsyncOpenReward
 
-
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-5.2")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY environment variable must be set")
+TRAJECTORY_PATH = "organicchem1909_trajectory.jsonl"
 
 
-async def main() -> None:
+def _text_of(response) -> str:
+    parts = []
+    for item in response.output:
+        if item.type == "message":
+            for block in item.content:
+                if block.type == "output_text":
+                    parts.append(block.text)
+    return "\n".join(parts).strip()
+
+
+async def main():
     or_client = AsyncOpenReward()
-    oai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    oai_client = AsyncOpenAI()
 
-    # Connect to local server
-    environment = or_client.environments.get(
-        name="local/OrganicChem1909",
-        base_url="http://localhost:8080"
+    MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-5.2")
+    ENV_NAME = "GeneralReasoning/OrganicChem1909"
+    SPLIT = os.environ.get("SPLIT", "train")
+    NUM_TASKS = int(os.environ.get("NUM_TASKS", "2"))
+    MAX_TURNS = int(os.environ.get("MAX_TURNS", "10"))
+    OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+
+    base_url = "http://localhost:8080" if os.environ.get("LOCAL") else None
+    environment = or_client.environments.get(name=ENV_NAME, base_url=base_url)
+    print(f"Environment: {ENV_NAME} ({base_url or 'deployed'})")
+
+    tasks = await environment.list_tasks(split=SPLIT)
+    tools = await environment.list_tools(format="openai")
+    terminal_tool = await environment.terminal_tool()
+
+    print(f"Found {len(tasks)} tasks in split {SPLIT!r}")
+    print(f"Tools visible to the model: {[t['name'] for t in tools]}")
+    print(f"Terminal tool (hidden): {terminal_tool}")
+
+    traj = open(TRAJECTORY_PATH, "w")
+
+    def record(kind: str, **fields):
+        traj.write(json.dumps({
+            "kind": kind,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            **fields,
+        }) + "\n")
+        traj.flush()
+
+    record(
+        "config",
+        model=MODEL_NAME,
+        env=ENV_NAME,
+        base_url=base_url or "deployed",
+        split=SPLIT,
+        visible_tools=[t["name"] for t in tools],
+        terminal_tool=None if terminal_tool is None else {
+            "name": terminal_tool.name,
+            "arg": terminal_tool.arg,
+            "description": terminal_tool.description,
+        },
     )
 
-    # Get tasks and tools
-    tasks = await environment.list_tasks(split="test")
-    tools = await environment.list_tools(format="openai")
+    rewards = []
 
-    print(f"Found {len(tasks)} test tasks")
+    for task in tasks[:NUM_TASKS]:
+        encounter = task.task_spec.get("uuid", "?")
+        print(f"\n=== Task {encounter} ===")
 
-    # Test first task
-    task = tasks[0]
-    print(f"\n{'='*60}")
-    print(f"{'='*60}\n")
+        async with environment.session(
+            task=task,
+            secrets={"openai_api_key": OPENAI_API_KEY},
+        ) as session:
+            assistant_ends_rollout = await session.is_assistant_message_final()
+            session_tools = await session.list_tools()
+            print(f"is_assistant_message_final() -> {assistant_ends_rollout}")
+            print(f"session.list_tools() -> {[t.name for t in session_tools]}")
+            assert "answer" not in [t.name for t in session_tools], \
+                "terminal tool leaked into the model's tool list"
 
-    finished = False
+            prompt = await session.get_prompt()
+            input_list = [{"role": "user", "content": prompt[0].text}]
 
-    async with environment.session(
-        task=task,
-        secrets={"openai_api_key": OPENAI_API_KEY}
-    ) as session:
-        # Get initial prompt
-        prompt = await session.get_prompt()
-        prompt_text = prompt[0].text if isinstance(prompt, list) else prompt
-
-        print("PROMPT:")
-        print(prompt_text)
-        print(f"\n{'='*60}\n")
-
-        input_list = [{"role": "user", "content": prompt_text}]
-
-        # Agent loop
-        while not finished:
-            response = await oai_client.responses.create(
-                model=MODEL_NAME,
-                tools=tools,
-                input=input_list,
+            record(
+                "task_start",
+                task_id=encounter,
+                is_assistant_message_final=assistant_ends_rollout,
+                session_tools=[t.name for t in session_tools],
+                prompt=prompt[0].text,
             )
 
-            # Process model output
-            for item in response.output:
-                if item.type == "function_call":
-                    print(f"TOOL CALL: {item.name}")
-                    print(f"Arguments: {item.arguments}\n")
+            reward = None
+            turn = 0
 
-                    # Call tool
-                    tool_result = await session.call_tool(
-                        item.name,
-                        json.loads(str(item.arguments))
-                    )
+            while turn < MAX_TURNS:
+                turn += 1
 
-                    reward = tool_result.reward
-                    finished = tool_result.finished
+                # Omit `tools` when the environment exposes none.
+                kwargs = {"model": MODEL_NAME, "input": input_list}
+                if tools:
+                    kwargs["tools"] = tools
+                response = await oai_client.responses.create(**kwargs)
+                input_list += response.output
 
-                    # Add tool result to input
-                    input_list.append({
-                        "type": "function_call_output",
-                        "call_id": item.call_id,
-                        "output": tool_result.blocks[0].text if tool_result.blocks else ""
-                    })
+                calls = [i for i in response.output if i.type == "function_call"]
+                if calls:
+                    for item in calls:
+                        args = json.loads(str(item.arguments))
+                        tool_result = await session.call_tool(item.name, args)
+                        input_list.append({
+                            "type": "function_call_output",
+                            "call_id": item.call_id,
+                            "output": tool_result.blocks[0].text,
+                        })
+                        record("tool_call", task_id=encounter, turn=turn,
+                               tool=item.name, arguments=args,
+                               output=tool_result.blocks[0].text)
+                    continue
 
-                    print(f"REWARD: {reward:.3f}")
-                    print(f"\nOUTPUT:")
-                    print(tool_result.blocks[0].text if tool_result.blocks else "(no output)")
-                    print(f"\n{'='*60}\n")
+                answer_text = _text_of(response)
+                print(f"[{turn}] answer: {len(answer_text)} chars — {answer_text[:160]!r}")
+                record("assistant_final_message", task_id=encounter,
+                       turn=turn, text=answer_text)
 
-                    if finished:
-                        print("FINISHED!")
-                        break
+                if not assistant_ends_rollout:
+                    print("Not a terminal-tool environment; stopping.")
+                    break
 
-                elif item.type == "text":
-                    print(f"MODEL: {item.text}\n")
-
-            # Safety: break if no tool call
-            if not any(i.type == "function_call" for i in response.output):
-                print("No tool call made, ending session.")
+                out = await session.call_terminal_tool(answer_text)
+                reward = out.reward
+                print(f"call_terminal_tool() -> reward={reward} finished={out.finished}")
+                print(out.blocks[0].text[:600])
+                record("terminal_tool_result", task_id=encounter, turn=turn,
+                       submitted=answer_text, reward=out.reward, finished=out.finished,
+                       output=out.blocks[0].text, metadata=out.metadata)
                 break
+
+            rewards.append(reward)
+            record("task_end", task_id=encounter, turns=turn, reward=reward)
+
+    scored = [r for r in rewards if r is not None]
+    summary = {
+        "num_tasks": len(rewards),
+        "num_scored": len(scored),
+        "mean_reward": (sum(scored) / len(scored)) if scored else None,
+        "rewards": rewards,
+    }
+    record("summary", **summary)
+    traj.close()
+
+    print(f"\n=== Summary ===\n{json.dumps(summary, indent=2)}")
+    print(f"Trajectory written to {TRAJECTORY_PATH}")
 
 
 if __name__ == "__main__":

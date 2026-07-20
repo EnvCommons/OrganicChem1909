@@ -23,6 +23,7 @@ from openreward.environments import (
     JSONObject,
     TextBlock,
     ToolOutput,
+    terminal,
     tool,
     Split
 )
@@ -283,10 +284,16 @@ class OrganicChem1909(Environment):
         paragraphs = [p.strip() for p in response.split("\n\n") if p.strip()]
         return paragraphs[-1] if paragraphs else "See grading analysis above."
 
+    @terminal
     @tool
     async def answer(self, params: AnswerInput) -> ToolOutput:
         """
-        Submit your answer to the chemistry question.
+        Grade the assistant's final message against the reference answer.
+
+        Terminal tool: hidden from the model, which replies with its answer as
+        an ordinary message rather than calling a tool. The harness routes that
+        message text here for LLM grading. Since this is the environment's only
+        tool, the model is given no tools at all.
 
         Your answer will be graded on conceptual understanding and reasoning,
         not exact wording. Alternative chemical nomenclature is accepted.
