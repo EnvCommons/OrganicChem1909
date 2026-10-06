@@ -56,8 +56,8 @@ None. The model is given no tools: it answers the chemistry question as an
 ordinary message, and that message ends the rollout.
 
 Grading runs through a hidden `@terminal` tool, which sends the message text to
-the LLM grader alongside the reference answer and returns the grade, score, and
-feedback.
+the LLM grader alongside the reference answer and returns the grade and score.
+The reference answer and the grader's written feedback are not returned.
 
 ## Time Horizon
 
