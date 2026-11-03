@@ -19,11 +19,11 @@ OrganicChem1909 does not require a sandbox. It has minimal compute requirements.
 
 ## License
 
-[MIT](https://opensource.org/license/mit).
+[MIT](https://opensource.org/licenses/MIT).
 
 ## Tasks
 
-There are three splits: train, validation, and test. Questions are loaded from a parquet file (`organicchem1909_questions.parquet`) and span multiple categories and difficulty levels. Each question includes metadata: chapter, page reference, category, difficulty, and a context snippet from the source textbook.
+There are 279 tasks in the `train` split, 60 in `validation` and 60 in `test`. Questions are loaded from a parquet file (`organicchem1909_questions.parquet`) and span multiple categories and difficulty levels. Each question includes metadata: chapter, page reference, category, difficulty, and a context snippet from the source textbook.
 
 ## Reward Structure
 
@@ -33,12 +33,9 @@ This is a sparse reward environment with a **binary** reward. The agent replies 
 - **PARTIALLY_CORRECT** → reward **0.0**. Partially sound reasoning earns nothing; there is no partial credit.
 - **INCORRECT** → reward **0.0**. The answer is wrong or missing key information.
 
-An empty answer scores 0.0 without invoking the grader.
+An empty answer scores 0.0 without invoking the grader. Only the first graded answer is rewarded; a repeat submission gets a reward of -0.1.
 
-The grader also emits a numeric confidence score. It is recorded in the tool
-result's `metadata` for analysis but does **not** shape the reward — it is an
-uncalibrated free-choice number that varies by roughly ±0.05 when the same
-answer is regraded, so the discrete verdict is the stable signal.
+The grader also emits a numeric confidence score. It is recorded in the tool result's `metadata` for analysis but does **not** shape the reward: it is an uncalibrated free-choice number chosen by the LLM, so the discrete verdict is the stable signal.
 
 Grading rules:
 - Both IUPAC names, common names, and historical 1909 terminology are accepted.
@@ -52,30 +49,17 @@ Questions are sourced from "Practical Methods of Organic Chemistry" (1909), a pu
 
 ## Tools
 
-None. The model is given no tools: it answers the chemistry question as an
-ordinary message, and that message ends the rollout.
+None. The model is given no tools: it answers the chemistry question as an ordinary message, and that message ends the rollout.
 
-Grading runs through a hidden `@terminal` tool, which sends the message text to
-the LLM grader alongside the reference answer and returns the grade and score.
-The reference answer and the grader's written feedback are not returned.
+Grading runs through a hidden terminal tool, `answer`, which sends the message text to the LLM grader alongside the reference answer and returns the grade and score. The reference answer and the grader's written feedback are not returned.
 
 ## Time Horizon
 
-OrganicChem1909 is a single-turn environment. The agent receives a question and submits one answer. Each task requires exactly one tool call.
-
-## Environment Difficulty
-
-[Statistics on environment difficulty here]
+OrganicChem1909 is a single-turn environment. The agent receives a question and replies with one answer as an ordinary message.
 
 ## Other Environment Requirements
 
-OrganicChem1909 requires an OpenAI API key (`OPENAI_API_KEY` secret) for LLM-based grading of answers.
-
-```bash
-export OPENAI_API_KEY=your_api_key_here
-```
-
-Pass the key via the secrets parameter when creating a session:
+OrganicChem1909 requires an OpenAI API key, passed as the `openai_api_key` secret, for LLM-based grading of answers:
 
 ```python
 async with environment.session(task=task, secrets={"openai_api_key": OPENAI_API_KEY}) as session:
@@ -83,7 +67,7 @@ async with environment.session(task=task, secrets={"openai_api_key": OPENAI_API_
 
 ## Safety
 
-Agents in OrganicChem1909 are asked to answer chemistry questions from a historical textbook. The environment does not present direct safety risks, as agents only provide text answers with no access to external systems, tools, or the internet.
+Agents in OrganicChem1909 are asked to answer chemistry questions from a historical textbook. The environment does not present direct safety risks, as agents only provide text answers with no access to external systems or the internet.
 
 ## Citations
 
